@@ -1,0 +1,2 @@
+- Make unification errors actually decent by using substitution_result
+- Find a way to represent introduction of fresh variables (maybe use a richer representation for names)
