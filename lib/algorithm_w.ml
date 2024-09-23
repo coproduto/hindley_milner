@@ -119,13 +119,15 @@ let generalize_simple_type ctx simple_type =
   Forall (generalized_bindings, simple_type)
 
 let get_literal_type = function
-  | IntLit _ -> Some IntType
-  | BoolLit _ -> Some BoolType
-  | StringLit _ -> Some StringType
+  | IntLit _ -> PrimType IntType
+  | BoolLit _ -> PrimType BoolType
+  | StringLit _ -> PrimType StringType
 
 type substitution_result =
   | Applies of substitution
   | FailsOccurCheck of string * simple_type
+  | PrimitiveMismatch of prim_type * prim_type
+  | ExpressionTypeMismatch of simple_type * simple_type
   | InnerError of simple_type * simple_type * substitution_result
 
 let bind_var (name_to_bind : string) (t : simple_type) : substitution_result =
@@ -135,38 +137,82 @@ let bind_var (name_to_bind : string) (t : simple_type) : substitution_result =
   then FailsOccurCheck (name_to_bind, t)
   else match t with
        | TypeVar n ->
-          if n = name_to_bind
+          if
+            not (String.starts_with ~prefix:"?" n) &&
+            not (String.starts_with ~prefix:"?" name_to_bind) &&
+            n = name_to_bind
           then Applies empty_substitution
           else Applies (StringMap.singleton name_to_bind t)
        | _ -> Applies (StringMap.singleton name_to_bind t)
   
-(* let rec most_general_unifier (t1 : simple_type) (t2 : simple_type) : substitution_result = *)
-(*   match (t1, t2) with *)
-(*   | (TypeVar n, rhs) -> *)
-(*      bind_var n rhs *)
-(*   | (lhs, TypeVar n) -> *)
-(*      bind_var n lhs *)
-(*   | (PrimType p1, PrimType p2) -> *)
-(*      if p1 = p2 then Some empty_substitution else None *)
-(*   | (FunType (a1, r1), FunType (a2, r2)) -> *)
-(*      let s1 = most_general_unifier a1 a2 in *)
-(*      (match s1 with *)
-(*      | None -> None *)
-(*      | Some s1 -> *)
-(*         let s2 = most_general_unifier (apply_filtered_subst s1 r1) (apply_filtered_subst s1 r2) in *)
-(*         match s2 with *)
-(*         | None -> None *)
-(*         | Some s2 -> Some (compose_substs s1 s2)) *)
-(*   | _ -> None *)
-     
+let rec most_general_unifier (t1 : simple_type) (t2 : simple_type) : substitution_result =
+  match (t1, t2) with
+  | (TypeVar n, rhs) ->
+     bind_var n rhs
+  | (lhs, TypeVar n) ->
+     bind_var n lhs
+  | (PrimType p1, PrimType p2) ->
+     if p1 = p2 then Applies empty_substitution else PrimitiveMismatch (p1, p2)
+  | (FunType (a1, r1), FunType (a2, r2)) ->
+     let s1 = most_general_unifier a1 a2 in
+     (match s1 with
+      | Applies s1 ->
+         let sr1 = (apply_filtered_subst s1 r1) in
+         let sr2 = (apply_filtered_subst s1 r2) in
+         let s2 = most_general_unifier sr1 sr2 in
+        (match s2 with
+        | Applies s2 -> Applies (compose_substs s1 s2)
+        | err -> InnerError (sr1, sr2, err))
+     | err -> InnerError (a1, a2, err))
+  | (lt, rt) -> ExpressionTypeMismatch (lt, rt)
 
-(* let apply_w ctx = function *)
-(*   | Val lit -> (empty_substitution, Some (get_literal_type lit)) *)
-(*   | Var name -> (empty_substitution, StringMap.find_opt name ctx) *)
-(*   | App (f, x) -> *)
-(*      let (s1, t1) = apply_w ctx f in *)
-(*      let (s2, t2) = apply_w (apply_subst_to_context s1 ctx) x in *)
-(*      let s3 = *)
+type inference_result =
+  | Success of substitution * simple_type
+  | UnboundVar of string
+  | UnificationError of expr * simple_type * simple_type * substitution_result
+  | InnerFailure of expr * inference_result
+
+let fresh_vars_from_binding_set bindings =
+  NameSet.fold
+    (fun binding map ->
+      let fresh_var = TypeVar ("?" ^ binding) 
+      in StringMap.add binding fresh_var map)
+    bindings
+    StringMap.empty
+
+let instantiate = function
+  | SimpleType t -> t
+  | Forall (bindings, body) ->
+     let subst = fresh_vars_from_binding_set bindings
+     in apply_filtered_subst subst body
+
+(* let rec apply_w ctx = function *)
+(*   | Val lit -> Success (empty_substitution, get_literal_type lit) *)
+(*   | Var name -> *)
+(*      let type_in_ctx = StringMap.find_opt name ctx *)
+(*      in (match type_in_ctx with *)
+(*      | None -> UnboundVar name *)
+(*      | Some dt -> Success (empty_substitution, instantiate dt)) *)
+(*   | (App (f, x) as app) -> *)
+(*      (match apply_w ctx f with *)
+(*      | Success (s1, t1) -> *)
+(*         let new_ctx = apply_subst_to_context s1 ctx in *)
+(*         (match apply_w new_ctx x with *)
+(*         | Success (s2, t2) -> *)
+(*            let fun_type_lhs = apply_filtered_subst s2 t1 in *)
+(*            let new_type_var = TypeVar "?ret" in *)
+(*            let fun_type_rhs = FunType (t2, new_type_var) in *)
+(*            let s3 = most_general_unifier fun_type_lhs fun_type_rhs *)
+(*            in (match s3 with *)
+(*               | Applies s3 ->  *)
+(*                 Success ( *)
+(*                     compose_substs (compose_substs s1 s2) s3, *)
+(*                     apply_filtered_subst s3 new_type_var *)
+(*                   ) *)
+(*               | err -> UnificationError (app, fun_type_lhs, fun_type_rhs, err)) *)
+(*         | err -> InnerFailure (x, err)) *)
+(*      | err -> InnerFailure (f, err)) *)
+(*   |  *)
      
 
 
