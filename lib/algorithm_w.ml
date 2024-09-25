@@ -186,34 +186,50 @@ let instantiate = function
      let subst = fresh_vars_from_binding_set bindings
      in apply_filtered_subst subst body
 
-(* let rec apply_w ctx = function *)
-(*   | Val lit -> Success (empty_substitution, get_literal_type lit) *)
-(*   | Var name -> *)
-(*      let type_in_ctx = StringMap.find_opt name ctx *)
-(*      in (match type_in_ctx with *)
-(*      | None -> UnboundVar name *)
-(*      | Some dt -> Success (empty_substitution, instantiate dt)) *)
-(*   | (App (f, x) as app) -> *)
-(*      (match apply_w ctx f with *)
-(*      | Success (s1, t1) -> *)
-(*         let new_ctx = apply_subst_to_context s1 ctx in *)
-(*         (match apply_w new_ctx x with *)
-(*         | Success (s2, t2) -> *)
-(*            let fun_type_lhs = apply_filtered_subst s2 t1 in *)
-(*            let new_type_var = TypeVar "?ret" in *)
-(*            let fun_type_rhs = FunType (t2, new_type_var) in *)
-(*            let s3 = most_general_unifier fun_type_lhs fun_type_rhs *)
-(*            in (match s3 with *)
-(*               | Applies s3 ->  *)
-(*                 Success ( *)
-(*                     compose_substs (compose_substs s1 s2) s3, *)
-(*                     apply_filtered_subst s3 new_type_var *)
-(*                   ) *)
-(*               | err -> UnificationError (app, fun_type_lhs, fun_type_rhs, err)) *)
-(*         | err -> InnerFailure (x, err)) *)
-(*      | err -> InnerFailure (f, err)) *)
-(*   |  *)
-     
-
-
-                       
+let rec apply_w ctx = function
+  | Val lit -> Success (empty_substitution, get_literal_type lit)
+  | Var name ->
+     let type_in_ctx = StringMap.find_opt name ctx
+     in (match type_in_ctx with
+     | None -> UnboundVar name
+     | Some dt -> Success (empty_substitution, instantiate dt))
+  | (App (f, x) as app) ->
+     (match apply_w ctx f with
+     | Success (s1, t1) ->
+        let new_ctx = apply_subst_to_context s1 ctx in
+        (match apply_w new_ctx x with
+        | Success (s2, t2) ->
+           let fun_type_lhs = apply_filtered_subst s2 t1 in
+           let new_type_var = TypeVar "?ret" in
+           let fun_type_rhs = FunType (t2, new_type_var) in
+           let s3 = most_general_unifier fun_type_lhs fun_type_rhs
+           in (match s3 with
+              | Applies s3 ->
+                Success (
+                    compose_substs (compose_substs s1 s2) s3,
+                    apply_filtered_subst s3 new_type_var
+                  )
+              | err -> UnificationError (app, fun_type_lhs, fun_type_rhs, err))
+        | err -> InnerFailure (x, err))
+     | err -> InnerFailure (f, err))
+  | Fun (n, expr) ->
+     let context_without_n = remove_from_context ctx n in
+     let new_type_var = TypeVar "?arg" in
+     let new_type_var_dt = SimpleType (TypeVar "?arg") in
+     let local_ctx = StringMap.add n new_type_var_dt context_without_n in
+     (match apply_w local_ctx expr with
+     | Success (s1, t1) ->
+        Success (s1, FunType (apply_filtered_subst s1 new_type_var, t1))
+     | err -> InnerFailure (expr, err))
+  | Let (n, expr, body) ->
+     (match apply_w ctx expr with
+      | Success (s1, t1) ->
+         let ctx_without_n = remove_from_context ctx n in
+         let t1_generalized = generalize_simple_type (apply_subst_to_context s1 ctx) t1 in
+         let local_base_ctx = StringMap.add n t1_generalized ctx_without_n in
+         let local_ctx = apply_subst_to_context s1 local_base_ctx in
+         (match apply_w local_ctx body with
+          | Success (s2, t2) ->
+             Success (compose_substs s1 s2, t2)
+          | err -> InnerFailure (body, err))
+      | err -> InnerFailure (expr, err))                   
